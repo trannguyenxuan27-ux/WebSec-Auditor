@@ -1,109 +1,143 @@
-# 📬 Mailbox Provisioner
+# WebSec-Auditor
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 
-Bulk mailbox provisioning for self-hosted [Mailcow](https://mailcow.email/). Read users from a CSV file, create mailboxes through the Mailcow Admin API, and write the generated credentials to a protected output file.
+WebSec-Auditor là công cụ tự động audit bảo mật web bằng Python. Công cụ crawl website, khám phá endpoint/form và chạy các scanner mỏng (lightweight) tập trung vào OWASP Top 10 cùng các cấu hình sai phổ biến.
 
-> **Intended use:** administration of mail servers you own or are explicitly authorised to manage.
+> **Cảnh báo pháp lý — hãy đọc trước khi sử dụng**
+> Chỉ sử dụng công cụ này trên hệ thống bạn **sở hữu** hoặc đã có **ủy quyền bằng văn bản** để kiểm thử. Việc quét máy chủ không thuộc quyền của bạn có thể vi phạm pháp luật và điều khoản dịch vụ. Bạn chịu trách nhiệm tuân thủ pháp luật tại quốc gia của mình.
+>
+> *Only use this tool on systems you own or have explicit written permission to test. Unauthorised scanning may be illegal.*
 
-## Features
+## Tính năng
 
-| Feature | What it does |
+| Module | Chức năng |
 | --- | --- |
-| **Idempotency** | Calls `GET /api/v1/get/mailbox/{email}` before `POST /api/v1/add/mailbox`, so existing mailboxes are skipped instead of duplicated. |
-| **Rate limiting** | Enforces a configurable minimum delay between every GET and POST request. |
-| **Dry run** | `--dry-run` performs zero network calls and prints the planned actions and generated passwords. |
-| **Docker lab** | `docker-compose.lab.yml` binds Mailcow's ports to `127.0.0.1` and disables netfilter for isolated testing. |
-| **Robust errors** | Handles HTTP failures and catches `JSONDecodeError`/HTML responses returned by WAFs. |
-| **Safe output** | Refuses to write outside the working directory with `os.path.commonpath` and stores credentials with `0600` permissions. |
+| **Crawler** (`utils/crawler.py`) | BFS theo độ sâu (`max_depth`), trích xuất `<a href>` và `<form>` + tham số GET/POST, trả về danh sách `Endpoint` |
+| **HeaderScanner** (`scanners/headers.py`) | Kiểm tra `Content-Security-Policy`, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options` |
+| **SQLiScanner** (`scanners/sqli.py`) | Error-based + difference-based: so sánh response với baseline sau khi inject `'`, `"`, `1' OR '1'='1` |
+| **XSSScanner** (`scanners/xss.py`) | Gửi `<script>alert(1)</script>` và biến thể, kiểm tra payload có bị phản chiếu nguyên vẹn không |
+| **SSLScanner** (`scanners/ssl_scan.py`) | Kiểm tra phiên bản TLS, ngày hết hạn chứng chỉ, cipher suite yếu bằng `ssl`/`socket` |
+| **DirectoryScanner** (`scanners/directory.py`) | Thử truy cập `/admin`, `/backup.zip`, `/.git/config`, `/robots.txt`, `/.env`… theo status 200/403 |
+| **Engine** (`engine.py`) | Điều phối crawl + scan song song (`concurrent.futures`), tổng hợp `ScanResult` |
+| **Report** (`report/`) | Xuất JSON có cấu trúc và HTML nhóm theo severity (High/Medium/Low/Info) |
+| **CLI** (`cli.py`) | `argparse`, in tiến trình, hỗ trợ `full`/`quick`/từng scanner |
 
-## Quick Start
+## Cấu trúc thư mục
 
-### 1. Install
+```
+WebSec-Auditor/
+├── cli.py              # Giao diện dòng lệnh
+├── engine.py           # Điều phối crawler + scanners
+├── models.py           # Endpoint, Finding, ScanResult, BaseScanner
+├── utils/
+│   └── crawler.py      # Crawler BFS
+├── scanners/
+│   ├── headers.py
+│   ├── sqli.py
+│   ├── xss.py
+│   ├── ssl_scan.py
+│   └── directory.py
+├── report/
+│   ├── json_report.py
+│   └── html_report.py
+├── tests/
+│   ├── test_headers.py
+│   ├── test_sqli.py
+│   ├── test_xss.py
+│   └── test_engine.py
+├── requirements.txt
+└── README.md
+```
+
+## Cài đặt
+
+Yêu cầu Python >= 3.9.
 
 ```bash
-git clone https://github.com/trannguyenxuan27-ux/clone-mail.git
-cd clone-mail
+git clone https://github.com/trannguyenxuan27-ux/WebSec-Auditor.git
+cd WebSec-Auditor
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Prepare a batch file
+## Cách sử dụng
 
-The first column is the local part (or a full address), and the second column is the display name:
-
-```csv
-alice,Alice Nguyen
-bob,Bob Smith
-```
-
-A ready-to-use sample lives at `examples/users.csv`.
-
-### 3. Preview with a dry run
+### Quét đầy đủ (mặc định)
 
 ```bash
-python tool.py \
-  --url https://mail.lab.local \
-  --domain lab.local \
-  --batch examples/users.csv \
-  --dry-run
+python cli.py --url https://example.com --output json --output-file report.json
 ```
 
-No network calls are made in this mode. Review the generated addresses and passwords before continuing.
-
-### 4. Provision for real
+### Quét nhanh (chỉ headers / ssl / dir — ít xâm nhập nhất)
 
 ```bash
-export MAILCOW_API_KEY="your-mailcow-admin-api-key"
-
-python tool.py \
-  --url https://mail.lab.local \
-  --domain lab.local \
-  --batch examples/users.csv \
-  --out credentials.csv
+python cli.py --url https://example.com --scan-type quick --output html
 ```
 
-Credentials are written to `credentials.csv` with mode `0600`. The file is git-ignored by default.
-
-### Options
-
-| Flag | Description |
-| --- | --- |
-| `--url` | Mailcow base URL, for example `https://mail.lab.local`. |
-| `--key` | Admin API key. Falls back to `MAILCOW_API_KEY`. Required unless `--dry-run` is used. |
-| `--domain` | Target mail domain. |
-| `--batch` | CSV file containing `local_part,name` rows. |
-| `--out` | Credential CSV output path. Defaults to `credentials.csv`. |
-| `--dry-run` | Print actions only, with no network calls. |
-| `--quota` | Mailbox quota in MiB. Defaults to `1024`. |
-| `--rate-limit` | Minimum seconds between API requests. Defaults to `0.25`. |
-| `--timeout` | HTTP timeout in seconds. Defaults to `15`. |
-
-## Docker Lab
-
-Mailcow's lab override binds all service ports to loopback and disables the netfilter sidecar. It uses the `!override` YAML tag, so it requires Docker Compose v2.24 or newer:
+### Quét một scanner cụ thể
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.lab.yml up -d
+python cli.py --url https://example.com --scan-type sqli
+python cli.py --url https://example.com --scan-type xss --threads 10 --timeout 15
 ```
 
-Exposed on `127.0.0.1` only:
+### Tùy chỉnh crawl / hiệu năng
 
-| Port | Service |
-| --- | --- |
-| `80`, `443` | nginx (Mailcow UI and API) |
-| `25`, `465`, `587` | postfix (SMTP) |
-| `993`, `995` | dovecot (IMAP/POP3) |
+```bash
+python cli.py --url https://example.com \
+  --max-depth 3 \
+  --max-urls 200 \
+  --threads 5 \
+  --timeout 10 \
+  --delay 0.5
+```
 
-`DISABLE_NETFILTER=1` stops the netfilter container from modifying host firewall rules. This override is intended for isolated labs and must never be exposed to the public internet.
+| Tham số | Mô tả | Mặc định |
+| --- | --- | --- |
+| `--url` | URL mục tiêu (bắt buộc) | — |
+| `--scan-type` | `full`, `quick`, `headers`, `sqli`, `xss`, `ssl`, `dir` | `full` |
+| `--output` | `json` hoặc `html` | `json` |
+| `--output-file` | Đường dẫn file kết quả | `report.json` / `report.html` |
+| `--max-depth` | Độ sâu crawl | `2` |
+| `--timeout` | Timeout mỗi request (giây) | `10` |
+| `--threads` | Số luồng song song | `5` |
+| `--delay` | Delay giữa các request (rate limiting) | `0.5` |
 
-## Ethical Note
+### Định dạng đầu ra
 
-This project is provided for **legitimate mail-server administration only**. Use it exclusively on infrastructure you own or have explicit written permission to manage. It must **not** be used to impersonate any organisation — including educational institutions — or to create deceptive, fraudulent, or abusive accounts. You are responsible for complying with applicable laws and your provider's acceptable-use policy.
+**JSON** — metadata (target, thời gian, summary) + danh sách finding với `endpoint`, `scanner`, `severity`, `evidence`, `recommendation`.
 
-Dự án này chỉ dành cho mục đích quản trị máy chủ email hợp pháp. Không được dùng để giả mạo bất kỳ tổ chức nào, bao gồm các tổ chức giáo dục, hoặc để tạo tài khoản lừa đảo.
+**HTML** — báo cáo trực quan, nhóm theo High → Medium → Low → Info.
+
+Ví dụ một finding:
+
+```json
+{
+  "endpoint": "http://example.com/search?q=x",
+  "scanner": "xss",
+  "severity": "High",
+  "title": "Reflected XSS in 'q'",
+  "evidence": "Payload '<script>alert(1)</script>' was reflected verbatim",
+  "recommendation": "Contextually encode output and add CSP."
+}
+```
+
+## Kiểm thử
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Các test sử dụng mock HTTP nên không cần mạng và không chạm vào máy chủ thật.
+
+## Ghi chú kỹ thuật
+
+- Mọi request được bọc `try/except`; lỗi được ghi log và quét tiếp — chương trình không crash vì một endpoint lỗi.
+- `delay` giữa các request giúp tránh làm quá tải server mục tiêu.
+- Các scanner phát hiện theo heuristic (error/difference/reflection). Kết quả là **nghi vấn cần xác minh thủ công**, không phải bằng chứng khẳng định. Hãy xác nhận thêm bằng công cụ chuyên sâu (Burp Suite, sqlmap…) chỉ trên mục tiêu đã ủy quyền.
 
 ## License
 

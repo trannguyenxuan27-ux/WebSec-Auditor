@@ -3,6 +3,11 @@ __pycache__/
 .venv/
 venv/
 .env
-credentials*.json
+report.json
+report.html
 credentials*.csv
+credentials*.json
 .DS_Store
+.coverage
+htmlcov/
+.pytest_cache/
