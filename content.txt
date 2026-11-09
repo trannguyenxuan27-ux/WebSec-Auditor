@@ -1,1 +1,1 @@
-Third test content
+Test via alias from bashrc
